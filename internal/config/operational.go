@@ -111,6 +111,7 @@ const (
 	DefaultWitnessMaxBeadRespawns        = 3
 	DefaultWitnessDoneIntentStuckTimeout = 60 * time.Second
 	DefaultWitnessDoneIntentRecentGrace  = 30 * time.Second
+	DefaultWitnessHandoffSmellThreshold  = 3
 )
 
 // LoadOperationalConfig loads operational config from a town root.
@@ -731,4 +732,12 @@ func (wt *WitnessThresholds) DoneIntentRecentGraceD() time.Duration {
 		return ParseDurationOrDefault(wt.DoneIntentRecentGrace, DefaultWitnessDoneIntentRecentGrace)
 	}
 	return DefaultWitnessDoneIntentRecentGrace
+}
+
+// HandoffSmellThresholdV returns the configured or default handoff smell threshold.
+func (wt *WitnessThresholds) HandoffSmellThresholdV() int {
+	if wt != nil && wt.HandoffSmellThreshold != nil {
+		return *wt.HandoffSmellThreshold
+	}
+	return DefaultWitnessHandoffSmellThreshold
 }

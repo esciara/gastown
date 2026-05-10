@@ -16,6 +16,7 @@ import (
 	"github.com/steveyegge/gastown/internal/beads"
 	"github.com/steveyegge/gastown/internal/cli"
 	"github.com/steveyegge/gastown/internal/config"
+	"github.com/steveyegge/gastown/internal/witness"
 	"github.com/steveyegge/gastown/internal/constants"
 	"github.com/steveyegge/gastown/internal/events"
 	"github.com/steveyegge/gastown/internal/git"
@@ -314,6 +315,7 @@ func runHandoff(cmd *cobra.Command, args []string) error {
 	if townRoot, err := workspace.FindFromCwd(); err == nil && townRoot != "" {
 		_ = LogHandoff(townRoot, agent, handoffSubject)
 		_ = events.LogFeed(events.TypeHandoff, agent, events.HandoffPayload(handoffSubject, true))
+		detectHandoffSmell(townRoot, agent)
 	}
 
 	// NOTE: reportAgentState("stopped") removed (gt-zecmc)
@@ -1717,4 +1719,82 @@ func isPatrolRole(role string) bool {
 		return true
 	}
 	return false
+}
+
+// detectHandoffSmell records a handoff for the agent's current work bead and
+// escalates to Mayor if the threshold is reached (gh#3909).
+func detectHandoffSmell(townRoot, agent string) {
+	beadID := findCurrentWorkBead(townRoot, agent)
+	if beadID == "" {
+		return
+	}
+
+	count := witness.RecordBeadHandoff(townRoot, beadID)
+
+	threshold := config.LoadOperationalConfig(townRoot).GetWitnessConfig().HandoffSmellThresholdV()
+	if count < threshold {
+		return
+	}
+
+	if !witness.ShouldAlertHandoffSmell(townRoot, beadID) {
+		return
+	}
+	witness.MarkHandoffSmellAlerted(townRoot, beadID)
+
+	alertHandoffSmellToMayor(townRoot, beadID, agent, count)
+}
+
+// findCurrentWorkBead returns the non-mail bead currently hooked to agent,
+// or "" if none found. Tries the rig-level beads dir first, then town-level.
+func findCurrentWorkBead(townRoot, agent string) string {
+	if rigName := os.Getenv("GT_RIG"); rigName != "" {
+		if id := queryHookedWorkBead(filepath.Join(townRoot, rigName), agent); id != "" {
+			return id
+		}
+	}
+	return queryHookedWorkBead(townRoot, agent)
+}
+
+// queryHookedWorkBead lists hooked beads for agent in beadsRoot and returns
+// the first non-mail bead ID, or "" if none found.
+func queryHookedWorkBead(beadsRoot, agent string) string {
+	b := beads.New(beadsRoot)
+	issues, err := b.List(beads.ListOptions{
+		Status:   beads.StatusHooked,
+		Assignee: agent,
+		Priority: -1,
+	})
+	if err != nil {
+		return ""
+	}
+	for _, issue := range issues {
+		if !beads.HasLabel(issue, "gt:message") {
+			return issue.ID
+		}
+	}
+	return ""
+}
+
+// alertHandoffSmellToMayor sends a formula smell alert to Mayor via gt mail.
+func alertHandoffSmellToMayor(townRoot, beadID, agent string, count int) {
+	subject := fmt.Sprintf("HANDOFF_SMELL: %s (%d handoffs)", beadID, count)
+	threshold := config.LoadOperationalConfig(townRoot).GetWitnessConfig().HandoffSmellThresholdV()
+	body := fmt.Sprintf(`Formula smell detected: bead %s has triggered %d handoffs (threshold: %d).
+
+Bead: %s
+Agent: %s
+Handoffs: %d
+
+When the same bead repeatedly triggers handoffs, it indicates the formula step
+is too large to complete in a single session. Consider splitting the step into
+smaller, session-sized chunks.
+
+The handoff threshold is configurable via witness.handoff_smell_threshold
+in the operational config (default: %d).`,
+		beadID, count, threshold,
+		beadID, agent, count, threshold)
+
+	cmd := exec.Command("gt", "mail", "send", "mayor/", "-s", subject, "-m", body)
+	cmd.Dir = townRoot
+	_ = cmd.Run()
 }
