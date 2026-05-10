@@ -485,6 +485,10 @@ type WitnessThresholds struct {
 	// DoneIntentRecentGrace is how recently a done-intent must have been created
 	// to be considered still in progress (default "30s").
 	DoneIntentRecentGrace string `json:"done_intent_recent_grace,omitempty"`
+
+	// HandoffSmellThreshold is the number of handoffs on the same bead that triggers
+	// a formula smell alert escalated to Mayor (default 3).
+	HandoffSmellThreshold *int `json:"handoff_smell_threshold,omitempty"`
 }
 
 // DefaultOperationalConfig returns an OperationalConfig with all defaults.
