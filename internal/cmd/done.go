@@ -1710,7 +1710,7 @@ func updateAgentStateOnDone(cwd, townRoot, exitType, issueID string) {
 	// Workflow step beads (*-wfs-*) are ephemeral formula steps managed by the workflow
 	// engine. For these, DEFERRED means "step complete, no code commits" not "work
 	// paused for resumption". Close them on DEFERRED so the convoy can advance.
-	isWorkflowStep := strings.Contains(hookedBeadID, "-wfs-")
+	isWorkflowStep := beads.IsWorkflowStepID(hookedBeadID)
 
 	if hookedBeadID != "" && (exitType != ExitDeferred || isWorkflowStep) {
 		// BUG FIX (gt-pftz): Close hooked bead unless already terminal (closed/tombstone).

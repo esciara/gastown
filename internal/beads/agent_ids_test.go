@@ -266,3 +266,21 @@ func TestAgentBeadIDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIsWorkflowStepID(t *testing.T) {
+	cases := []struct {
+		id   string
+		want bool
+	}{
+		{"gt-wfs-abc123", true},
+		{"hq-wfs-xyz", true},
+		{"gt-abc", false},
+		{"polecat/furiosa-reset", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := IsWorkflowStepID(c.id); got != c.want {
+			t.Errorf("IsWorkflowStepID(%q) = %v, want %v", c.id, got, c.want)
+		}
+	}
+}
+
