@@ -453,6 +453,13 @@ func ParseAgentBeadID(id string) (rig, role, name string, ok bool) {
 	return "", "", "", false
 }
 
+// IsWorkflowStepID reports whether id was minted by the formula workflow engine
+// as an ephemeral step bead (see internal/cmd/formula.go where IDs of the form
+// "<rigPrefix>-wfs-<short>" are generated).
+func IsWorkflowStepID(id string) bool {
+	return strings.Contains(id, "-wfs-")
+}
+
 // IsAgentSessionBead returns true if the bead ID represents an agent session molecule.
 // Agent session beads follow patterns like gt-mayor, bd-beads-witness, gt-gastown-crew-joe.
 // Supports any valid prefix (e.g., "gt-", "bd-"), not just "gt-".
