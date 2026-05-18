@@ -1141,6 +1141,18 @@ func hookBeadWithRetry(beadID, targetAgent, hookDir string) error {
 	const maxBackoff = 30 * time.Second
 	skipVerify := os.Getenv("GT_TEST_SKIP_HOOK_VERIFY") != ""
 
+	// Defensively re-resolve hookDir from the bead's prefix so that cross-DB
+	// wisps (e.g. a wisp created in a rig DB due to a daemon agent's arbitrary
+	// pane cwd) are updated in the correct database. Only overrides when
+	// routes.jsonl has a definitive mapping for the prefix; otherwise the
+	// caller-supplied hookDir is kept. (GH#3763)
+	if townRoot, twErr := workspace.FindFromCwd(); twErr == nil {
+		prefix := beads.ExtractPrefix(beadID)
+		if rigPath := beads.GetRigPathForPrefix(townRoot, prefix); rigPath != "" {
+			hookDir = rigPath
+		}
+	}
+
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		err := BdCmd("update", beadID, "--status=hooked", "--assignee="+targetAgent).

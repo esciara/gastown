@@ -153,6 +153,14 @@ func runSlingFormula(ctx context.Context, args []string) error {
 	if formulaWorkDir == "" {
 		formulaWorkDir = townRoot
 	}
+	// Town-level daemon agents (deacon, mayor) have no fixed cwd — their pane
+	// can be anywhere. Using the pane's arbitrary cwd as formulaWorkDir would
+	// create wisps in whatever rig DB that cwd resolves to, then hookBeadWithRetry
+	// fails to locate them if the prefix is absent from routes.jsonl. Daemon
+	// wisps always belong in the hq database. (GH#3763)
+	if targetAgent == "deacon/" || targetAgent == "mayor/" {
+		formulaWorkDir = townRoot
+	}
 
 	if slingDryRun {
 		existing, err := findHookedFormulaSingletonFn(formulaWorkDir, targetAgent, formulaName)

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -258,15 +257,14 @@ func runEscalateList(cmd *cobra.Command, args []string) error {
 	var live []*beads.Issue
 	var phantomCount int
 	for _, issue := range issues {
-		if _, err := bd.Show(issue.ID); err != nil {
-			if errors.Is(err, beads.ErrNotFound) {
-				phantomCount++
-				fmt.Fprintf(os.Stderr, "warning: skipping unresolvable escalation %s (not found in live Dolt)\n", issue.ID)
-				continue
-			}
-			// For other errors (e.g. Dolt temporarily unreachable), include
-			// the entry so the user can see it — just warn.
-			fmt.Fprintf(os.Stderr, "warning: could not verify escalation %s: %v\n", issue.ID, err)
+		// Use getBeadInfo (routes via routes.jsonl) instead of bd.Show (fixed hq
+		// BEADS_DIR) so cross-rig escalation beads are not falsely reported as
+		// phantoms. bd.Show with a hq-scoped beads instance returns ErrNotFound for
+		// any bead whose prefix routes to a rig database. (GH#3763)
+		if _, err := getBeadInfo(issue.ID); err != nil {
+			phantomCount++
+			fmt.Fprintf(os.Stderr, "warning: skipping unresolvable escalation %s (not found in live Dolt)\n", issue.ID)
+			continue
 		}
 		live = append(live, issue)
 	}
