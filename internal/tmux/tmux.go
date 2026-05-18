@@ -170,7 +170,7 @@ func BuildCommand(args ...string) *exec.Cmd {
 // BuildCommandContext is like BuildCommand but honors a context for cancellation.
 func BuildCommandContext(ctx context.Context, args ...string) *exec.Cmd {
 	allArgs := []string{"-u"}
-	if sock := GetDefaultSocket(); sock != "" {
+	if sock := resolvedSocketName(); sock != "" {
 		allArgs = append(allArgs, "-L", sock)
 	}
 	allArgs = append(allArgs, args...)
@@ -196,17 +196,37 @@ const noTownSocket = "gt-no-town-socket"
 const EnvAgentReady = "GT_AGENT_READY"
 
 // NewTmux creates a new Tmux wrapper using the initialized town socket.
-// Falls back to GT_TOWN_SOCKET env var (set by cross-socket tmux bindings).
+// Falls back to explicit socket env vars when registry init did not run.
 // Empty socket means use the default tmux server.
 func NewTmux() *Tmux {
-	sock := GetDefaultSocket()
-	if sock == "" {
-		// GT_TOWN_SOCKET is embedded in tmux bindings created by EnsureBindingsOnSocket
-		// so that "gt agents menu" / "gt feed" invoked from a personal terminal still
-		// target the correct town server even when InitRegistry was not called.
-		sock = os.Getenv("GT_TOWN_SOCKET")
+	return &Tmux{socketName: resolvedSocketName()}
+}
+
+// resolvedSocketName returns the tmux socket name this process should use.
+// InitRegistry normally sets the package default. When a command runs outside a
+// discoverable workspace (e.g., nudge-poller launched from a crew workspace),
+// preserve explicit socket env overrides instead of falling through to the
+// default tmux server, where the Gas Town sessions do not exist.
+func resolvedSocketName() string {
+	if sock := GetDefaultSocket(); sock != "" {
+		return sock
 	}
-	return &Tmux{socketName: sock}
+
+	// GT_TOWN_SOCKET is embedded in tmux bindings by EnsureBindingsOnSocket so
+	// that commands invoked from a personal terminal still target the right town.
+	if sock := os.Getenv("GT_TOWN_SOCKET"); sock != "" {
+		return sock
+	}
+
+	// GT_TMUX_SOCKET is the user-facing override consumed by InitRegistry. Honor
+	// explicit socket names here too when InitRegistry did not run. "default" and
+	// "auto" require a town root to resolve, so do not treat them as socket names.
+	switch sock := os.Getenv("GT_TMUX_SOCKET"); sock {
+	case "", "default", "auto":
+		return ""
+	default:
+		return sock
+	}
 }
 
 // NewTmuxWithSocket creates a Tmux wrapper that targets a named socket.

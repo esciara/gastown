@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steveyegge/gastown/internal/config"
 	"github.com/steveyegge/gastown/internal/nudge"
+	"github.com/steveyegge/gastown/internal/session"
 	"github.com/steveyegge/gastown/internal/tmux"
 	"github.com/steveyegge/gastown/internal/workspace"
 )
@@ -52,6 +53,13 @@ func runNudgePoller(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("cannot find town root: %w", err)
 	}
+
+	// Set the tmux socket from the town root. The poller runs as a detached
+	// subprocess and inherits the parent's environment, but InitRegistry is not
+	// called automatically. Without this, NewTmux() may connect to the default
+	// tmux server instead of the town server, causing send-keys to fail with
+	// "can't find window: %NNNN". (GH#3761)
+	_ = session.InitRegistry(townRoot)
 
 	pollInterval, err := time.ParseDuration(nudgePollerIntervalFlag)
 	if err != nil {
