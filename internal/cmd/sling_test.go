@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -821,6 +822,97 @@ func TestResolveTargetRejectsLivePolecatMissingTargetRigDatabase(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// TestResolveTargetResetsLivePolecatBranchForNewBead verifies that slinging a new
+// bead to a named polecat whose session is running triggers branch reset via the
+// spawn path with PreferName set (gh#3772).
+func TestResolveTargetResetsLivePolecatBranchForNewBead(t *testing.T) {
+	townRoot, _ := setupCrossDatabaseSlingGuardTest(t)
+
+	prevResolve := resolveTargetAgentFn
+	prevSpawn := spawnPolecatForSling
+	t.Cleanup(func() {
+		resolveTargetAgentFn = prevResolve
+		spawnPolecatForSling = prevSpawn
+	})
+
+	// Polecat session is alive
+	resolveTargetAgentFn = func(target string) (string, string, string, error) {
+		return "gastown/polecats/toast", "%1", filepath.Join(townRoot, "gastown", "polecats", "toast"), nil
+	}
+
+	var capturedPreferName string
+	var capturedRig string
+	spawnPolecatForSling = func(rigName string, opts SlingSpawnOptions) (*SpawnedPolecatInfo, error) {
+		capturedRig = rigName
+		capturedPreferName = opts.PreferName
+		return &SpawnedPolecatInfo{
+			RigName:     rigName,
+			PolecatName: opts.PreferName,
+			ClonePath:   filepath.Join(townRoot, rigName, "polecats", opts.PreferName),
+		}, nil
+	}
+
+	result, err := resolveTarget("gastown/polecats/toast", ResolveTargetOptions{
+		HookBead: "gt-new-bead",
+		TownRoot: townRoot,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedRig != "gastown" {
+		t.Errorf("expected spawn for rig gastown, got %q", capturedRig)
+	}
+	if capturedPreferName != "toast" {
+		t.Errorf("expected PreferName=toast, got %q", capturedPreferName)
+	}
+	if result.NewPolecatInfo == nil {
+		t.Error("expected NewPolecatInfo to be set (signals fresh session + branch reset)")
+	}
+	if !result.HookSetAtomically {
+		t.Error("expected HookSetAtomically=true when HookBead is set")
+	}
+}
+
+// TestResolveTargetDeadPolecatPreservesPreferName verifies that slinging to a
+// named polecat with a dead session passes PreferName so the specific polecat
+// (not an arbitrary idle one) gets its branch reset (gh#3772).
+func TestResolveTargetDeadPolecatPreservesPreferName(t *testing.T) {
+	townRoot, _ := setupCrossDatabaseSlingGuardTest(t)
+
+	prevResolve := resolveTargetAgentFn
+	prevSpawn := spawnPolecatForSling
+	t.Cleanup(func() {
+		resolveTargetAgentFn = prevResolve
+		spawnPolecatForSling = prevSpawn
+	})
+
+	// Polecat session is dead
+	resolveTargetAgentFn = func(target string) (string, string, string, error) {
+		return "", "", "", fmt.Errorf("no tmux session for %s", target)
+	}
+
+	var capturedPreferName string
+	spawnPolecatForSling = func(rigName string, opts SlingSpawnOptions) (*SpawnedPolecatInfo, error) {
+		capturedPreferName = opts.PreferName
+		return &SpawnedPolecatInfo{
+			RigName:     rigName,
+			PolecatName: opts.PreferName,
+			ClonePath:   filepath.Join(townRoot, rigName, "polecats", opts.PreferName),
+		}, nil
+	}
+
+	_, err := resolveTarget("gastown/polecats/toast", ResolveTargetOptions{
+		HookBead: "gt-new-bead",
+		TownRoot: townRoot,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capturedPreferName != "toast" {
+		t.Errorf("expected PreferName=toast for dead-session polecat, got %q", capturedPreferName)
 	}
 }
 
