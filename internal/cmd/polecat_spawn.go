@@ -56,6 +56,7 @@ type SlingSpawnOptions struct {
 	Agent        string // Agent override for this spawn (e.g., "gemini", "codex", "claude-haiku")
 	BaseBranch   string // Override base branch for polecat worktree (e.g., "develop", "release/v2")
 	ResumeBranch string // Resume an existing branch (e.g. PR head) instead of creating polecat/<name>/<bead>@<ts>
+	PreferName   string // Prefer a specific polecat by name; branch reset works for any state (gh#3772)
 }
 
 // SpawnPolecatForSling creates a fresh polecat and optionally starts its session.
@@ -151,10 +152,22 @@ func SpawnPolecatForSling(rigName string, opts SlingSpawnOptions) (*SpawnedPolec
 	// Persistent polecat model (gt-4ac): try to reuse an idle polecat first.
 	// Idle polecats have completed their work but kept their sandbox (worktree).
 	// Reusing avoids the overhead of creating a new worktree.
-	idlePolecat, findErr := polecatMgr.FindIdlePolecat()
-	if findErr == nil && idlePolecat != nil {
+	// When PreferName is set (re-sling to a specific named polecat), target that
+	// polecat directly. ReuseIdlePolecat kills the session unconditionally so it
+	// works for any state: idle, stalled, or running with a stale branch (gh#3772).
+	var idlePolecat *polecat.Polecat
+	if opts.PreferName != "" {
+		idlePolecat, _ = polecatMgr.Get(opts.PreferName)
+	} else {
+		idlePolecat, _ = polecatMgr.FindIdlePolecat()
+	}
+	if idlePolecat != nil {
 		polecatName := idlePolecat.Name
-		fmt.Printf("Reusing idle polecat: %s\n", polecatName)
+		if opts.PreferName != "" {
+			fmt.Printf("Re-slinging to polecat %s (resetting branch)...\n", polecatName)
+		} else {
+			fmt.Printf("Reusing idle polecat: %s\n", polecatName)
+		}
 
 		// ResumeBranch takes precedence over BaseBranch / integration auto-detection:
 		// when the user (or scheduler) wants to resume an existing PR branch, we

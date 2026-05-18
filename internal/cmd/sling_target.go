@@ -280,6 +280,7 @@ func resolveTarget(target string, opts ResolveTargetOptions) (*ResolvedTarget, e
 					Agent:        opts.Agent,
 					BaseBranch:   opts.BaseBranch,
 					ResumeBranch: opts.ResumeBranch,
+					PreferName:   parts[2],
 				}
 				spawnInfo, spawnErr := spawnPolecatForSling(rigName, spawnOpts)
 				if spawnErr != nil {
@@ -306,6 +307,53 @@ func resolveTarget(target string, opts ResolveTargetOptions) (*ResolvedTarget, e
 			}
 		}
 	}
+
+	// When assigning a new bead to a specific named polecat whose session is
+	// currently running, reset the worktree branch for the new work. Without this,
+	// the polecat would resume on the old bead's branch, causing stale-branch
+	// failures (gh#3772). PreferName in SpawnPolecatForSling calls
+	// ReuseIdlePolecat which kills the session and resets to a fresh branch.
+	if opts.HookBead != "" && isPolecatTarget(agentID) {
+		parts := strings.Split(agentID, "/")
+		if len(parts) >= 3 && parts[1] == "polecats" {
+			rigName := parts[0]
+			polecatName := parts[2]
+			if opts.BeadID != "" && !opts.Force {
+				if err := checkCrossRigGuard(opts.BeadID, rigName+"/polecats/_", opts.TownRoot); err != nil {
+					return nil, err
+				}
+			}
+			if opts.BeadID != "" {
+				if err := verifyBeadExistsInTargetRigDatabase(opts.BeadID, rigName, opts.TownRoot); err != nil {
+					return nil, err
+				}
+			}
+			fmt.Printf("Resetting branch for polecat %s/%s (new bead: %s)...\n", rigName, polecatName, opts.HookBead)
+			spawnOpts := SlingSpawnOptions{
+				Force:        opts.Force,
+				Account:      opts.Account,
+				Create:       opts.Create,
+				HookBead:     opts.HookBead,
+				Agent:        opts.Agent,
+				BaseBranch:   opts.BaseBranch,
+				ResumeBranch: opts.ResumeBranch,
+				PreferName:   polecatName,
+			}
+			spawnInfo, spawnErr := spawnPolecatForSling(rigName, spawnOpts)
+			if spawnErr != nil {
+				return nil, fmt.Errorf("resetting branch for polecat %s: %w", polecatName, spawnErr)
+			}
+			result.Agent = spawnInfo.AgentID()
+			result.NewPolecatInfo = spawnInfo
+			result.WorkDir = spawnInfo.ClonePath
+			result.HookSetAtomically = true
+			if !opts.NoBoot {
+				wakeRigAgents(rigName)
+			}
+			return result, nil
+		}
+	}
+
 	result.Agent = agentID
 	result.Pane = pane
 	result.WorkDir = workDir
