@@ -1900,6 +1900,7 @@ func TestIsGasTownRuntimePath(t *testing.T) {
 		path string
 		want bool
 	}{
+		// Gas Town toolchain
 		{".claude/", true},
 		{".claude/settings.json", true},
 		{".claude/commands/foo.md", true},
@@ -1910,13 +1911,43 @@ func TestIsGasTownRuntimePath(t *testing.T) {
 		{".beads/", true},
 		{".beads/db.json", true},
 		{".logs/agent.log", true},
+		// Python caches
 		{"__pycache__/", true},
 		{"__pycache__/foo.cpython-312.pyc", true},
 		{"src/__pycache__/bar.pyc", true},
+		{".pytest_cache/", true},
+		{".pytest_cache/v/cache/lastfailed", true},
+		{"services/api/.pytest_cache/", true},
+		{".mypy_cache/", true},
+		{".mypy_cache/3.12/builtins.json", true},
+		{".ruff_cache/", true},
+		{".ruff_cache/0.1.0/", true},
+		// JS/Node artifacts
+		{"node_modules/", true},
+		{"node_modules/express/index.js", true},
+		{"services/cyrus/workflow-cyrus-edge/node_modules/lodash/lodash.js", true},
+		{".vite/", true},
+		{".vite/deps/react.js", true},
+		{"dashboard/public/.vite/vitest/results.json", true},
+		// Test coverage
+		{"coverage/", true},
+		{"coverage/lcov.info", true},
+		{"htmlcov/", true},
+		{"htmlcov/index.html", true},
+		// Runtime file extensions (#3737)
+		{"services/workflows/execution_log.db", true},
+		{"app.db", true},
+		{"src/compiled.pyc", true},
+		{"foo/.DS_Store", true},
+		{".DS_Store", true},
+		// Real project files — must NOT be treated as runtime
 		{"src/main.go", false},
 		{"README.md", false},
 		{".gitignore", false},
 		{"claude-stuff/foo", false},
+		{"schema.sql", false},
+		{"migrations/001_init.sql", false},
+		{"testdata/fixture.json", false},
 	}
 
 	for _, tt := range tests {

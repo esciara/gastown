@@ -657,6 +657,19 @@ func (g *Git) StagedDeletions() ([]string, error) {
 	return strings.Split(trimmed, "\n"), nil
 }
 
+// StagedFiles returns the list of all files currently staged for commit.
+func (g *Git) StagedFiles() ([]string, error) {
+	out, err := g.run("diff", "--cached", "--name-only")
+	if err != nil {
+		return nil, err
+	}
+	trimmed := strings.TrimSpace(out)
+	if trimmed == "" {
+		return nil, nil
+	}
+	return strings.Split(trimmed, "\n"), nil
+}
+
 // ShowFile returns the contents of a file at a given ref (e.g., "origin/main:CLAUDE.md").
 // Returns empty string and no error if the file does not exist at that ref.
 func (g *Git) ShowFile(ref, path string) (string, error) {
@@ -2143,16 +2156,29 @@ func isBeadsPath(path string) bool {
 	return strings.Contains(path, ".beads/") || strings.Contains(path, ".beads\\")
 }
 
-// isGasTownRuntimePath returns true if the path is a Gas Town or Cursor runtime
-// artifact that should not block gt done. These paths are managed by the toolchain,
-// not by the developer, and are normally gitignored via EnsureGitignorePatterns.
+// isGasTownRuntimePath returns true if the path is a Gas Town, Cursor, or project
+// runtime artifact that should not be auto-committed by gt-pvx. These paths are
+// managed by the toolchain or generated at runtime, and are normally gitignored.
+// See: https://github.com/gastownhall/gastown/issues/3737
 func isGasTownRuntimePath(path string) bool {
+	// Runtime/toolchain directories that should never be committed.
 	prefixes := []string{
+		// Gas Town toolchain
 		".beads/", ".beads\\",
 		".claude/", ".claude\\",
 		".runtime/", ".runtime\\",
 		".logs/", ".logs\\",
+		// Python bytecode / caches
 		"__pycache__/", "__pycache__\\",
+		".pytest_cache/", ".pytest_cache\\",
+		".mypy_cache/", ".mypy_cache\\",
+		".ruff_cache/", ".ruff_cache\\",
+		// JS/Node build caches and dependency trees
+		"node_modules/", "node_modules\\",
+		".vite/", ".vite\\",
+		// Test coverage output
+		"coverage/", "coverage\\",
+		"htmlcov/", "htmlcov\\",
 	}
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(path, prefix) || strings.Contains(path, "/"+prefix) {
@@ -2161,7 +2187,12 @@ func isGasTownRuntimePath(path string) bool {
 	}
 	// Also match bare directory entries from git status (e.g. ".claude/")
 	bare := strings.TrimSuffix(strings.TrimSuffix(path, "/"), "\\")
-	for _, name := range []string{".beads", ".claude", ".runtime", ".logs", "__pycache__"} {
+	for _, name := range []string{
+		".beads", ".claude", ".runtime", ".logs",
+		"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+		"node_modules", ".vite",
+		"coverage", "htmlcov",
+	} {
 		if bare == name {
 			return true
 		}
@@ -2171,11 +2202,21 @@ func isGasTownRuntimePath(path string) bool {
 	if bare == "CLAUDE.local.md" {
 		return true
 	}
+	// Runtime file extensions: compiled Python bytecode and SQLite runtime databases.
+	base := filepath.Base(bare)
+	ext := strings.ToLower(filepath.Ext(base))
+	if ext == ".pyc" || ext == ".db" {
+		return true
+	}
+	// macOS metadata files must never be committed.
+	if base == ".DS_Store" {
+		return true
+	}
 	return false
 }
 
-// CleanExcludingRuntime returns true if the only uncommitted changes are Gas Town
-// runtime artifacts (.beads/, .claude/, .runtime/, .logs/, __pycache__/).
+// CleanExcludingRuntime returns true if the only uncommitted changes are runtime
+// artifacts (Gas Town toolchain, node_modules, build caches, *.db, *.pyc, etc.).
 // Used by gt done to avoid blocking completion on toolchain-managed files.
 //
 // Note: UnpushedCommits and StashCount are intentionally NOT checked here. This

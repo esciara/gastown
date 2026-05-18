@@ -41,11 +41,23 @@ func checkpointDogInterval(config *DaemonPatrolConfig) time.Duration {
 
 // runtimeExcludeDirs are directories to unstage after git add -A.
 // These contain runtime/ephemeral data that should not be checkpointed.
+// Keep in sync with isGasTownRuntimePath in internal/git/git.go (#3737).
 var runtimeExcludeDirs = []string{
+	// Gas Town toolchain
 	".claude/",
 	".beads/",
 	".runtime/",
+	// Python caches
 	"__pycache__/",
+	".pytest_cache/",
+	".mypy_cache/",
+	".ruff_cache/",
+	// JS/Node
+	"node_modules/",
+	".vite/",
+	// Test coverage
+	"coverage/",
+	"htmlcov/",
 }
 
 // runCheckpointDog auto-commits WIP changes in active polecat worktrees.
@@ -156,6 +168,22 @@ func (d *Daemon) checkpointWorktree(workDir, rigName, polecatName string) bool {
 	for _, dir := range runtimeExcludeDirs {
 		// git reset HEAD -- <dir> is safe even if dir doesn't exist (exits 0)
 		_, _ = runGitCmd(workDir, "reset", "HEAD", "--", dir)
+	}
+
+	// Unstage runtime artifact files by extension (.db, .pyc) and name (.DS_Store).
+	// Handles files outside the named directories (e.g. execution_log.db in a
+	// service directory with no .gitignore — the incident that triggered #3737).
+	if stagedOut, err := runGitCmd(workDir, "diff", "--cached", "--name-only"); err == nil {
+		for _, f := range strings.Split(strings.TrimSpace(stagedOut), "\n") {
+			if f == "" {
+				continue
+			}
+			base := filepath.Base(f)
+			ext := strings.ToLower(filepath.Ext(base))
+			if ext == ".db" || ext == ".pyc" || base == ".DS_Store" {
+				_, _ = runGitCmd(workDir, "reset", "HEAD", "--", f)
+			}
+		}
 	}
 
 	// Unstage deletions of tracked files. A checkpoint should preserve work

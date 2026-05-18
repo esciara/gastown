@@ -370,9 +370,26 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 						_ = g.ResetFiles("CLAUDE.md")
 					}
 				}
-				// Unstage runtime/ephemeral directories (mirrors checkpoint_dog exclusions).
-				for _, dir := range []string{".beads/", ".claude/", ".runtime/", "__pycache__/"} {
+				// Unstage runtime/ephemeral directories — these must never land in MRs.
+				// See: https://github.com/gastownhall/gastown/issues/3737
+				for _, dir := range []string{
+					".beads/", ".claude/", ".runtime/", "__pycache__/",
+					"node_modules/", ".vite/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/",
+					"coverage/", "htmlcov/",
+				} {
 					_ = g.ResetFiles(dir)
+				}
+				// Unstage runtime artifact files by extension (.db, .pyc) and name (.DS_Store).
+				// Handles files outside the named directories above (e.g. execution_log.db in a
+				// service directory with no .gitignore — the incident that triggered #3737).
+				if stagedFiles, sfErr := g.StagedFiles(); sfErr == nil {
+					for _, f := range stagedFiles {
+						base := filepath.Base(f)
+						ext := strings.ToLower(filepath.Ext(base))
+						if ext == ".db" || ext == ".pyc" || base == ".DS_Store" {
+							_ = g.ResetFiles(f)
+						}
+					}
 				}
 				// Unstage deletions of tracked files. A safety-net auto-commit should
 				// preserve work (additions + modifications), never destroy it (deletions).
@@ -499,8 +516,8 @@ func runDone(cmd *cobra.Command, args []string) (retErr error) {
 		}
 
 		// Block if there are uncommitted changes (would be lost on completion).
-		// Runtime artifacts (.claude/, .beads/, .runtime/, __pycache__/) are
-		// excluded — these are toolchain-managed and normally gitignored.
+		// Runtime artifacts (toolchain dirs, node_modules, *.db, *.pyc, etc.) are
+		// excluded — see isGasTownRuntimePath for the full list (#3737).
 		// Without this filter, gt done fails on virtually every polecat because
 		// Cursor creates .claude/ at runtime in every workspace.
 		workStatus, err := g.CheckUncommittedWork()
