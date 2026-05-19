@@ -379,6 +379,7 @@ func init() {
 	doltCmd.AddCommand(doltSyncCmd)
 	doltCmd.AddCommand(doltPullCmd)
 	doltCmd.AddCommand(doltMigrateWispsCmd)
+	doltCmd.AddCommand(doltMigrateStatusCmd)
 
 	doltKillImpostersCmd.Flags().BoolVar(&doltKillImpostersDry, "dry-run", false, "Preview without killing")
 
@@ -1113,6 +1114,60 @@ func runDoltList(cmd *cobra.Command, args []string) error {
 		} else {
 			fmt.Printf("  %s (orphan)\n    %s\n", style.Bold.Render(db), style.Dim.Render(dbDir))
 		}
+	}
+
+	return nil
+}
+
+func runDoltMigrateStatus(cmd *cobra.Command, args []string) error {
+	townRoot, err := workspace.FindFromCwdOrError()
+	if err != nil {
+		return fmt.Errorf("not in a Gas Town workspace: %w", err)
+	}
+
+	running, _, err := doltserver.IsRunning(townRoot)
+	if err != nil {
+		return fmt.Errorf("checking Dolt server: %w", err)
+	}
+	if !running {
+		return fmt.Errorf("Dolt server is not running. Start it with: gt dolt start")
+	}
+
+	parity, err := doltserver.CheckSchemaMigrationsParity(townRoot)
+	if err != nil {
+		return fmt.Errorf("checking schema_migrations parity: %w", err)
+	}
+
+	if len(parity.Statuses) == 0 {
+		fmt.Println("No rig databases found.")
+		return nil
+	}
+
+	fmt.Printf("schema_migrations parity (expected version: %d)\n\n", parity.ExpectedVersion)
+
+	for _, s := range parity.Statuses {
+		switch {
+		case s.Missing:
+			fmt.Printf("  %-24s  %s\n", s.Name,
+				style.Bold.Render("MISSING")+" (no schema_migrations table)")
+		case s.Version < parity.ExpectedVersion:
+			fmt.Printf("  %-24s  version %-4d  %s\n", s.Name, s.Version,
+				style.Bold.Render(fmt.Sprintf("BEHIND by %d", parity.ExpectedVersion-s.Version)))
+		default:
+			fmt.Printf("  %-24s  version %-4d  ok\n", s.Name, s.Version)
+		}
+	}
+
+	fmt.Println()
+	if parity.IsHealthy() {
+		fmt.Printf("%s All rig databases are at schema version %d.\n",
+			style.Bold.Render("✓"), parity.ExpectedVersion)
+	} else {
+		fmt.Printf("%s %d database(s) need attention.\n",
+			style.Bold.Render("!"), len(parity.Missing)+len(parity.Lagging))
+		fmt.Println()
+		fmt.Println("To apply missing migrations:  gt dolt migrate <rig>")
+		fmt.Println("To park an abandoned rig:     gt rig park <rig>")
 	}
 
 	return nil
