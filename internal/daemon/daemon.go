@@ -454,6 +454,16 @@ func (d *Daemon) Run() (err error) {
 		return err
 	}
 
+	// Per-rig schema_migrations parity check (GH#3770).
+	// Detects rig DBs provisioned outside the normal bd-init path that are
+	// behind on schema migrations. bd commands against those rigs fail with
+	// cryptic SQL errors; we fail loud here so the operator can fix the rig
+	// before it silently corrupts agent state.
+	// Only blocks when the Dolt server is reachable and drift is confirmed.
+	if err := d.checkRigSchemaParity(); err != nil {
+		return err
+	}
+
 	// Repair metadata.json for all rigs on startup.
 	// This ensures all rigs have proper Dolt server configuration.
 	if _, errs := doltserver.EnsureAllMetadata(d.config.TownRoot); len(errs) > 0 {
@@ -1083,6 +1093,69 @@ func (d *Daemon) checkAllRigsDolt() error {
 
 	return fmt.Errorf("daemon startup blocked: %d rig(s) not on Dolt backend\n\n  %s",
 		len(problems), strings.Join(problems, "\n\n  "))
+}
+
+// checkRigSchemaParity verifies that every known rig DB is at the same
+// schema_version (GH#3770). Rigs that were provisioned outside the normal
+// bd-init path can silently lag behind, causing cryptic SQL errors at runtime.
+//
+// Behaviour:
+//   - If the Dolt server is not reachable, the check is skipped (startup
+//     may not have brought the server up yet; the doctor check covers this).
+//   - If any rig is uninitialized or drifted, daemon startup is blocked with
+//     an actionable error message.
+func (d *Daemon) checkRigSchemaParity() error {
+	parity, err := doltserver.CheckRigsSchemaVersion(d.config.TownRoot)
+	if err != nil {
+		// Server unreachable — skip the check rather than blocking startup.
+		d.logger.Printf("Warning: schema parity check skipped (Dolt server not reachable): %v", err)
+		return nil
+	}
+
+	if len(parity.UninitializedRigs) == 0 && len(parity.DriftedRigs) == 0 {
+		if len(parity.Statuses) > 0 {
+			d.logger.Printf("Schema parity OK: %d rig DB(s) at schema_version %d",
+				len(parity.Statuses)-len(parity.ErrorRigs), parity.MaxVersion)
+		}
+		return nil
+	}
+
+	var lines []string
+	for _, s := range parity.Statuses {
+		switch {
+		case s.Error != "":
+			lines = append(lines, fmt.Sprintf("  %-20s %-20s error: %s", s.RigName, s.DBName, s.Error))
+		case !s.HasSchemaVersion:
+			lines = append(lines, fmt.Sprintf("  %-20s %-20s (uninitialized — no schema_version)", s.RigName, s.DBName))
+		default:
+			mark := ""
+			if s.SchemaVersion < parity.MaxVersion {
+				mark = fmt.Sprintf(" ← drifted (want %d, have %d)", parity.MaxVersion, s.SchemaVersion)
+			}
+			lines = append(lines, fmt.Sprintf("  %-20s %-20s v%d%s", s.RigName, s.DBName, s.SchemaVersion, mark))
+		}
+	}
+
+	var problems []string
+	if len(parity.UninitializedRigs) > 0 {
+		problems = append(problems, fmt.Sprintf(
+			"rig(s) missing schema_version (provisioned outside bd init): %s",
+			strings.Join(parity.UninitializedRigs, ", ")))
+	}
+	if len(parity.DriftedRigs) > 0 {
+		problems = append(problems, fmt.Sprintf(
+			"rig(s) below schema_version %d: %s",
+			parity.MaxVersion, strings.Join(parity.DriftedRigs, ", ")))
+	}
+
+	return fmt.Errorf(
+		"daemon startup blocked: schema_version parity check failed (%s)\n\n%s\n\n"+
+			"  To fix: open each drifted rig's beads store to trigger auto-migration, or\n"+
+			"  run 'gt dolt migrate-status' for a full parity table.\n"+
+			"  If the rig is being abandoned: gt rig park <rig>",
+		strings.Join(problems, "; "),
+		strings.Join(lines, "\n"),
+	)
 }
 
 // readBeadsBackend reads the backend field from metadata.json in a beads directory.
