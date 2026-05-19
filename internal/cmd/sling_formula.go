@@ -102,6 +102,16 @@ func findHookedFormulaSingleton(workDir, targetAgent, formulaName string) (*bead
 
 var findHookedFormulaSingletonFn = findHookedFormulaSingleton
 
+// isTownLevelAgent reports whether agentID refers to a town-level agent whose
+// canonical beads store is the HQ database (townRoot). Town-level agents are
+// deacon, mayor, and dogs — their beads live in hq, not in any rig database.
+func isTownLevelAgent(agentID string) bool {
+	return agentID == "mayor/" ||
+		agentID == "deacon/" ||
+		agentID == "deacon/boot" ||
+		strings.HasPrefix(agentID, "deacon/dogs")
+}
+
 // runSlingFormula handles standalone formula slinging.
 // Flow: cook → wisp → attach to hook → nudge
 func runSlingFormula(ctx context.Context, args []string) error {
@@ -134,11 +144,27 @@ func runSlingFormula(ctx context.Context, args []string) error {
 	}
 	targetAgent := resolved.Agent
 	targetPane := resolved.Pane
-	formulaWorkDir := resolved.WorkDir
 	delayedDogInfo := resolved.DelayedDogInfo
 	isSelfSling := resolved.IsSelfSling
 
 	fmt.Printf("%s Slinging formula %s to %s...\n", style.Bold.Render("🎯"), formulaName, targetAgent)
+
+	// Determine the working directory for bd mol wisp / cook.
+	// For town-level agents (deacon, mayor, dogs) the canonical beads store is
+	// the HQ database at townRoot — we must NOT use the agent's pane CWD because
+	// that CWD can be inside a rig directory, which would cause bd to create the
+	// wisp with a rig prefix. hookBeadWithRetry resolves the hook dir from the
+	// wisp's prefix via routes.jsonl; if the prefix is not registered there the
+	// update falls back to townRoot (HQ) and fails with "no issue found".
+	// Using townRoot for town-level targets guarantees hq-wisp-XXXXX is used, which
+	// routes.jsonl always maps correctly. See GH#3763.
+	formulaWorkDir := townRoot
+	if !isTownLevelAgent(targetAgent) {
+		// For rig agents use the resolved workDir (polecat clone path or agent CWD).
+		if resolved.WorkDir != "" {
+			formulaWorkDir = resolved.WorkDir
+		}
+	}
 
 	rollbackSpawned := func(beadID string) {
 		if resolved.NewPolecatInfo == nil {
@@ -146,12 +172,6 @@ func runSlingFormula(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("%s Rolling back spawned polecat %s...\n", style.Warning.Render("⚠"), resolved.NewPolecatInfo.PolecatName)
 		rollbackSlingArtifactsFn(resolved.NewPolecatInfo, beadID, formulaWorkDir, "")
-	}
-
-	// Resolve working directory for bd commands (routes to correct rig beads)
-	// Fall back to townRoot (HQ beads) if no specific rig directory was determined
-	if formulaWorkDir == "" {
-		formulaWorkDir = townRoot
 	}
 
 	if slingDryRun {

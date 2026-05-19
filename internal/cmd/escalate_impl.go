@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -255,18 +254,19 @@ func runEscalateList(cmd *cobra.Command, args []string) error {
 	// query may still return stale IDs (e.g. from a cached or cross-rig query)
 	// that no longer exist in the live database. We skip any entries that cannot
 	// be fetched individually, since they cannot be acked or closed anyway.
+	//
+	// Use getBeadInfo (prefix-routed bd show) rather than bd.Show (HQ-only SDK
+	// client) so that rig-prefixed escalation beads (e.g. gt-abc in the gastown
+	// DB) are resolved correctly. bd.Show targets a single DB and falsely marks
+	// cross-DB beads as phantoms. See GH#3763.
 	var live []*beads.Issue
 	var phantomCount int
 	for _, issue := range issues {
-		if _, err := bd.Show(issue.ID); err != nil {
-			if errors.Is(err, beads.ErrNotFound) {
-				phantomCount++
-				fmt.Fprintf(os.Stderr, "warning: skipping unresolvable escalation %s (not found in live Dolt)\n", issue.ID)
-				continue
-			}
-			// For other errors (e.g. Dolt temporarily unreachable), include
-			// the entry so the user can see it — just warn.
-			fmt.Fprintf(os.Stderr, "warning: could not verify escalation %s: %v\n", issue.ID, err)
+		if _, err := getBeadInfo(issue.ID); err != nil {
+			// getBeadInfo returns a generic "bead not found" error; treat as phantom.
+			phantomCount++
+			fmt.Fprintf(os.Stderr, "warning: skipping unresolvable escalation %s (not found in live Dolt)\n", issue.ID)
+			continue
 		}
 		live = append(live, issue)
 	}

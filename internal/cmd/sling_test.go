@@ -3281,3 +3281,164 @@ exit /b 0
 	}
 	// Any other error (e.g., no polecat to spawn) is acceptable — the guard is what we're testing.
 }
+
+// TestIsTownLevelAgent verifies the helper used by runSlingFormula to determine
+// whether formulaWorkDir should default to townRoot (HQ DB) or use the agent's
+// pane CWD. See GH#3763.
+func TestIsTownLevelAgent(t *testing.T) {
+	tests := []struct {
+		agentID string
+		want    bool
+	}{
+		{"mayor/", true},
+		{"deacon/", true},
+		{"deacon/boot", true},
+		{"deacon/dogs", true},
+		{"deacon/dogs/alpha", true},
+		{"deacon/dogs/beta", true},
+		// Rig agents — NOT town-level
+		{"gastown/witness", false},
+		{"gastown/polecats/nux", false},
+		{"gastown/refinery", false},
+		{"gastown/crew/jane", false},
+		{"beads/crew/dave", false},
+		// Edge cases
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.agentID, func(t *testing.T) {
+			got := isTownLevelAgent(tt.agentID)
+			if got != tt.want {
+				t.Errorf("isTownLevelAgent(%q) = %v, want %v", tt.agentID, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRunSlingFormulaUsesTownRootForDeaconTarget verifies that when a standalone
+// formula sling targets a town-level agent (e.g. deacon), the bd mol wisp command
+// runs from townRoot (so the wisp lands in the HQ database, not a rig DB).
+// Regression for GH#3763: before the fix, the wisp was created in whatever DB the
+// deacon's pane CWD mapped to, which could be a rig DB whose prefix is not in
+// routes.jsonl, causing hookBeadWithRetry to fall back to HQ and fail.
+func TestRunSlingFormulaUsesTownRootForDeaconTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skipping on windows - shell stubs")
+	}
+
+	townRootRaw := t.TempDir()
+	// On macOS, /var is a symlink to /private/var; $PWD in shell scripts returns the
+	// physical path. Resolve symlinks so Go path comparisons match what the shell reports.
+	townRoot, err := filepath.EvalSymlinks(townRootRaw)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", townRootRaw, err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(townRoot, "mayor", "rig"), 0755); err != nil {
+		t.Fatalf("mkdir mayor/rig: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(townRoot, ".beads"), 0755); err != nil {
+		t.Fatalf("mkdir .beads: %v", err)
+	}
+	// Create a "rig dir" that is NOT routes.jsonl-registered, to simulate the
+	// deacon's pane CWD being inside a rig. We want to assert that wisp creation
+	// runs from townRoot regardless.
+	rigCwd := filepath.Join(townRoot, "unregistered-rig")
+	if err := os.MkdirAll(rigCwd, 0755); err != nil {
+		t.Fatalf("mkdir rigCwd: %v", err)
+	}
+
+	binDir := filepath.Join(townRoot, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("mkdir binDir: %v", err)
+	}
+
+	logPath := filepath.Join(townRoot, "bd.log")
+	bdScript := `#!/bin/sh
+echo "$PWD|$*" >> "${BD_LOG}"
+cmd="$1"
+shift || true
+case "$cmd" in
+  formula) echo '{"name":"mol-deacon-patrol"}' ;;
+  cook)    exit 0 ;;
+  mol)
+    sub="$1"; shift || true
+    case "$sub" in
+      wisp) echo '{"new_epic_id":"hq-wisp-test"}' ;;
+    esac
+    ;;
+  update)  exit 0 ;;
+esac
+exit 0
+`
+	_ = writeBDStub(t, binDir, bdScript, "")
+
+	t.Setenv("BD_LOG", logPath)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv(EnvGTRole, "deacon")
+	t.Setenv("GT_POLECAT", "")
+	t.Setenv("GT_CREW", "")
+	t.Setenv("TMUX_PANE", "")
+	t.Setenv("GT_TEST_NO_NUDGE", "1")
+	t.Setenv("GT_TEST_SKIP_HOOK_VERIFY", "1")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	// CWD for the test process is the townRoot (deacon starts here)
+	if err := os.Chdir(townRoot); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	prevDryRun := slingDryRun
+	prevNoBoot := slingNoBoot
+	prevTargetFn := resolveTargetAgentFn
+	t.Cleanup(func() {
+		slingDryRun = prevDryRun
+		slingNoBoot = prevNoBoot
+		resolveTargetAgentFn = prevTargetFn
+	})
+
+	slingDryRun = false
+	slingNoBoot = true
+	// Stub the target resolution: deacon target returns rigCwd as workDir to
+	// simulate the deacon's pane CWD being inside an unregistered rig directory.
+	resolveTargetAgentFn = func(target string) (string, string, string, error) {
+		return "deacon/", "", rigCwd, nil
+	}
+
+	if err := runSlingFormula(context.Background(), []string{"mol-deacon-patrol", "deacon"}); err != nil {
+		t.Fatalf("runSlingFormula: %v", err)
+	}
+
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read bd log: %v", err)
+	}
+	logLines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+
+	// Every bd invocation must have run from townRoot, NOT from rigCwd.
+	// If any line shows rigCwd as the CWD, the fix did not work.
+	for _, line := range logLines {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "|", 2)
+		if len(parts) < 1 {
+			continue
+		}
+		invokedFrom := parts[0]
+		if invokedFrom == rigCwd {
+			t.Errorf("bd ran from unregistered rig dir %q — wisp would land in wrong DB; "+
+				"all town-level agent slings must run bd from townRoot. Full log:\n%s",
+				rigCwd, string(logBytes))
+		}
+		if !strings.HasPrefix(invokedFrom, townRoot) {
+			t.Errorf("bd ran from unexpected dir %q (expected under townRoot %q). Full log:\n%s",
+				invokedFrom, townRoot, string(logBytes))
+		}
+	}
+}
