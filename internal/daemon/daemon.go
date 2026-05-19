@@ -2057,6 +2057,16 @@ func (d *Daemon) openBeadsStores() (map[string]beadsdk.Storage, error) {
 		return nil, err
 	}
 
+	// Non-blocking schema parity check: log a loud warning when a rig DB is
+	// missing schema_migrations or lags behind its siblings. This surfaces
+	// schema drift before it causes cryptic SQL errors in bd queries.
+	// Does not block startup — the rig may still function for reads.
+	if parity, err := doltserver.CheckSchemaMigrationsParity(d.config.TownRoot); err != nil {
+		d.logger.Printf("Convoy: schema_migrations parity check error (non-fatal): %v", err)
+	} else if !parity.IsHealthy() {
+		d.logger.Printf("WARNING: %s", parity.WarningMessage())
+	}
+
 	names := make([]string, 0, len(stores))
 	for name := range stores {
 		names = append(names, name)

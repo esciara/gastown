@@ -301,6 +301,26 @@ formula's backup step (migration-backup-YYYYMMDD-HHMMSS/).`,
 	RunE: runDoltRollback,
 }
 
+var doltMigrateStatusCmd = &cobra.Command{
+	Use:   "migrate-status",
+	Short: "Show schema_migrations version parity across all rig databases",
+	Long: `Show the schema_migrations max version for each rig database.
+
+This command checks every registered rig database for a schema_migrations
+table and reports its maximum version. Databases that are missing the table
+or lag behind the highest version are flagged.
+
+A healthy workspace shows all rig databases at the same schema version.
+A drifted rig — one provisioned outside the migration path or restored from
+an old backup — will appear here as MISSING or with a lower version number.
+
+To apply missing migrations:   gt dolt migrate <rig>
+To park an abandoned rig:      gt rig park <rig>
+
+The Dolt server must be running. Start it with: gt dolt start`,
+	RunE: runDoltMigrateStatus,
+}
+
 var doltMigrateWispsCmd = &cobra.Command{
 	Use:   "migrate-wisps",
 	Short: "Migrate agent beads from issues to wisps table",
