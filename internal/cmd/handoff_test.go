@@ -484,6 +484,15 @@ func makeTestGitRepo(t *testing.T) string {
 // GT_ROLE as the authoritative check, so coordinators with a stale GT_POLECAT
 // in their environment are not redirected to gt done (GH #1707).
 func TestHandoffPolecatEnvCheck(t *testing.T) {
+	// Change to a temp dir so that any subprocess exec of "gt done"
+	// cannot find the real Gas Town workspace and operate on it.
+	origDir, _ := os.Getwd()
+	tmpDir := t.TempDir()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir to temp: %v", err)
+	}
+	t.Cleanup(func() { os.Chdir(origDir) })
+
 	tests := []struct {
 		name      string
 		role      string
